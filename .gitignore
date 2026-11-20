@@ -9,3 +9,5 @@ config/config.py
 outputs/
 eval/outputs/*
 !eval/outputs/.gitkeep
+.pytest_cache/
+.ruff_cache/

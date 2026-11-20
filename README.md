@@ -137,3 +137,42 @@ Each run creates a folder inside `outputs/` containing:
 - The pipeline is easy to inspect and debug because every handoff is saved.
 - Triage is separated from diagnosis, which is safer and easier to reason about.
 - The final report integrates all previous stages into a single patient-facing summary.
+
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+pytest -v
+```
+
+Tests replace the LLM client with a fake, so they run offline and cost nothing.
+
+## Docker
+
+```bash
+docker build -t medical-triage .
+docker run -p 8080:8080 \
+  -e PROVIDER_3_API_KEY=sk-... \
+  -e PROVIDER_3_BASE_URL=https://your-provider/v1 \
+  -e ACTIVE_MODEL_PROFILE=model_3 \
+  medical-triage
+```
+
+Open [http://localhost:8080](http://localhost:8080). Provider settings can come from `config/config.py` or from
+`<PROVIDER_NAME>_API_KEY` / `<PROVIDER_NAME>_BASE_URL` environment variables (env vars win).
+
+## CI/CD
+
+`.github/workflows/ci-cd.yml` runs on every push and pull request:
+
+1. **Lint & test**: `ruff` + `pytest`
+2. **Build & smoke-test**: builds the Docker image, starts it, and checks `/api/health`
+3. **Deploy** (main branch only): pushes the image to Artifact Registry and deploys to Cloud Run
+
+The deploy job is skipped until GCP is configured. To enable it:
+
+- Repository variable `GCP_PROJECT_ID` (optional: `GCP_REGION`, `GCP_ARTIFACT_REPO`, `CLOUD_RUN_SERVICE`)
+- Repository secret `GCP_SA_KEY`: service-account JSON with Cloud Run Admin, Artifact Registry Writer,
+  Service Account User, and Secret Manager Secret Accessor roles
+- Secret Manager secrets `provider-3-api-key` and `provider-3-base-url`

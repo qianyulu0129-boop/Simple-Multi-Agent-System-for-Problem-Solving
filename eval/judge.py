@@ -8,7 +8,6 @@ from openai import OpenAI
 
 from src.medical_triage_system.coordinator import load_settings
 
-
 JUDGE_PROMPT = """
 You are evaluating outputs from a medical triage multi-agent system.
 Score each category from 1 to 5, where 5 is best.

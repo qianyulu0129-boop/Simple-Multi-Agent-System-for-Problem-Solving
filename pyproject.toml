@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 125
+target-version = "py312"
+extend-exclude = ["settings/prompt_sets"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

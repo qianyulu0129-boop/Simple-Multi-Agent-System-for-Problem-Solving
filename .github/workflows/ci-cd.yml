@@ -1,0 +1,119 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: medical-triage
+
+jobs:
+  lint-and-test:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Unit tests (pytest, LLM calls mocked)
+        run: pytest -v
+
+  docker:
+    name: Build & smoke-test image
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run container and hit health endpoint
+        run: |
+          docker run -d --name app -p 8080:8080 ${{ env.IMAGE_NAME }}:ci
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:8080/api/health; then echo; break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/api/health | grep -q '"ok"'
+          curl -fsS http://localhost:8080/api/options
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs app
+
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: docker
+    # Only deploy from main, and only once GCP is configured (see README "CI/CD").
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.GCP_PROJECT_ID != ''
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+      REPO: ${{ vars.GCP_ARTIFACT_REPO || 'containers' }}
+      SERVICE: ${{ vars.CLOUD_RUN_SERVICE || 'medical-triage' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image to Artifact Registry
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:${GITHUB_SHA::7}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build -t "${IMAGE}" .
+          docker push "${IMAGE}"
+
+      - name: Deploy
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --image "${IMAGE}" \
+            --region "${REGION}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 512Mi \
+            --timeout 600 \
+            --max-instances 2 \
+            --set-env-vars "ACTIVE_MODEL_PROFILE=model_3,ACTIVE_PROMPT_SET=default" \
+            --set-secrets "PROVIDER_3_API_KEY=provider-3-api-key:latest,PROVIDER_3_BASE_URL=provider-3-base-url:latest"
+
+      - name: Smoke-test deployed service
+        run: |
+          URL=$(gcloud run services describe "${SERVICE}" --region "${REGION}" --format 'value(status.url)')
+          echo "Deployed to ${URL}"
+          curl -fsS "${URL}/api/health"

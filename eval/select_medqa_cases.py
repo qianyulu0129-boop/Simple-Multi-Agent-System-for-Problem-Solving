@@ -5,7 +5,6 @@ import json
 import re
 from pathlib import Path
 
-
 DIAGNOSIS_PATTERNS = [
     r"most likely diagnosis",
     r"most likely cause",

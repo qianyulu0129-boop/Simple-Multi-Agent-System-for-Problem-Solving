@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from .base_agent import BaseAgent
 from ..settings_loader import render_prompt
+from .base_agent import BaseAgent
 
 
 class DiagnosisAgent(BaseAgent):

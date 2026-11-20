@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +30,26 @@ def load_settings():
     return module
 
 
+def resolve_provider_config(provider_name: str, file_config: dict | None) -> dict | None:
+    """Merge provider settings from config.py with environment variables.
+
+    Environment variables win, so containers and CI can inject secrets
+    (e.g. PROVIDER_1_API_KEY, PROVIDER_1_BASE_URL) without a config.py file.
+    """
+    prefix = provider_name.upper()
+    env_key = os.getenv(f"{prefix}_API_KEY")
+    env_url = os.getenv(f"{prefix}_BASE_URL")
+    if file_config is None and env_key is None:
+        return None
+
+    merged = dict(file_config or {})
+    if env_key:
+        merged["api_key"] = env_key
+    if env_url:
+        merged["base_url"] = env_url
+    return merged
+
+
 class MedicalTriageCoordinator:
     def __init__(
         self,
@@ -40,17 +61,25 @@ class MedicalTriageCoordinator:
         self.root_dir = Path(__file__).resolve().parents[2]
         self.save_outputs = save_outputs
         self.settings = load_settings()
-        self.model_profile_name = model_profile_name or getattr(self.settings, "ACTIVE_MODEL_PROFILE", "balanced")
-        self.prompt_set_name = prompt_set_name or getattr(self.settings, "ACTIVE_PROMPT_SET", "default")
+        self.model_profile_name = (
+            model_profile_name
+            or os.getenv("ACTIVE_MODEL_PROFILE")
+            or getattr(self.settings, "ACTIVE_MODEL_PROFILE", "balanced")
+        )
+        self.prompt_set_name = (
+            prompt_set_name
+            or os.getenv("ACTIVE_PROMPT_SET")
+            or getattr(self.settings, "ACTIVE_PROMPT_SET", "default")
+        )
         self.model_profile = load_model_profile(self.root_dir, self.model_profile_name)
         self.prompt_set = load_prompt_set(self.root_dir, self.prompt_set_name)
         provider_name = self.model_profile.get("provider", "default_provider")
         providers = getattr(self.settings, "PROVIDERS", {})
-        provider_config = providers.get(provider_name)
+        provider_config = resolve_provider_config(provider_name, providers.get(provider_name))
         if not provider_config:
             raise ValueError(
-                f"Provider '{provider_name}' is not defined in config/config.py. "
-                "Add it under PROVIDERS before running this model profile."
+                f"Provider '{provider_name}' is not defined in config/config.py "
+                f"or via the {provider_name.upper()}_API_KEY environment variable."
             )
 
         api_key = provider_config.get("api_key", "")
@@ -93,7 +122,9 @@ class MedicalTriageCoordinator:
             user_prompt_template=self.prompt_set["treatment_user"],
         )
 
-        self.output_root = self.root_dir / getattr(self.settings, "OUTPUT_ROOT", "outputs")
+        self.output_root = self.root_dir / (
+            os.getenv("OUTPUT_ROOT") or getattr(self.settings, "OUTPUT_ROOT", "outputs")
+        )
 
     def run(self, patient_case: PatientCase) -> tuple[PipelineArtifacts, Path | None]:
         run_dir = self._make_run_dir() if self.save_outputs else None

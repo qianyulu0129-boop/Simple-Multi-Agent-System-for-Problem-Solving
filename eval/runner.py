@@ -7,9 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
+from tqdm import tqdm
+
 from src.medical_triage_system.coordinator import MedicalTriageCoordinator
 from src.medical_triage_system.schemas import PatientCase
-from tqdm import tqdm
 
 from .medqa_adapter import build_patient_case, normalize_options, resolve_gold_answer
 from .metrics import score_case_result
