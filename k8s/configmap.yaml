@@ -1,0 +1,11 @@
+# Non-secret runtime settings. Secrets (API keys) go in the "llm-credentials" Secret instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: medical-triage-config
+  labels:
+    app: medical-triage
+data:
+  ACTIVE_MODEL_PROFILE: "model_3"
+  ACTIVE_PROMPT_SET: "default"
+  OUTPUT_ROOT: "/tmp/outputs"

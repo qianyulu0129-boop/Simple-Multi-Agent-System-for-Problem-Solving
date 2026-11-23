@@ -67,10 +67,68 @@ jobs:
         if: failure()
         run: docker logs app
 
+  kubernetes:
+    name: Deploy to Kubernetes (kind) & smoke-test
+    runs-on: ubuntu-latest
+    needs: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create throwaway kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ci
+
+      - name: Build image and load it into the cluster
+        run: |
+          docker build -t medical-triage:local .
+          kind load docker-image medical-triage:local --name ci
+
+      - name: Apply manifests and wait for rollout
+        run: |
+          kubectl apply -f k8s/
+          kubectl rollout status deployment/medical-triage --timeout=120s
+          kubectl get pods -l app=medical-triage -o wide
+
+      - name: Smoke-test through the Service
+        run: |
+          kubectl port-forward svc/medical-triage 8080:80 > /tmp/pf.log 2>&1 &
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:8080/api/health; then echo; break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/api/health | grep -q '"ok"'
+
+      - name: Scale to 3 replicas and verify
+        run: |
+          kubectl scale deployment/medical-triage --replicas=3
+          kubectl rollout status deployment/medical-triage --timeout=120s
+          test "$(kubectl get deployment medical-triage -o jsonpath='{.status.readyReplicas}')" = "3"
+
+      - name: Self-healing check (delete a pod, expect replacement)
+        run: |
+          POD=$(kubectl get pods -l app=medical-triage -o jsonpath='{.items[0].metadata.name}')
+          kubectl delete pod "$POD" --wait=true
+          for i in $(seq 1 60); do
+            READY=$(kubectl get deployment medical-triage -o jsonpath='{.status.readyReplicas}')
+            if [ "$READY" = "3" ]; then echo "Recovered to 3 ready pods"; break; fi
+            sleep 2
+          done
+          kubectl get pods -l app=medical-triage
+          test "$(kubectl get deployment medical-triage -o jsonpath='{.status.readyReplicas}')" = "3"
+          ! kubectl get pod "$POD" > /dev/null 2>&1
+
+      - name: Debug info on failure
+        if: failure()
+        run: |
+          kubectl get all
+          kubectl describe pods -l app=medical-triage
+          kubectl logs -l app=medical-triage --tail=50
+
   deploy:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
-    needs: docker
+    needs: [docker, kubernetes]
     # Only deploy from main, and only once GCP is configured (see README "CI/CD").
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.GCP_PROJECT_ID != ''
     permissions:

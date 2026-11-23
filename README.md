@@ -162,13 +162,57 @@ docker run -p 8080:8080 \
 Open [http://localhost:8080](http://localhost:8080). Provider settings can come from `config/config.py` or from
 `<PROVIDER_NAME>_API_KEY` / `<PROVIDER_NAME>_BASE_URL` environment variables (env vars win).
 
+## Kubernetes
+
+Manifests live in `k8s/`:
+
+| File | What it does |
+| --- | --- |
+| `configmap.yaml` | Non-secret settings (model profile, prompt set) injected as env vars |
+| `deployment.yaml` | Runs 2 replicas with readiness/liveness probes on `/api/health`, resource limits, non-root user, read-only root filesystem, and zero-downtime rolling updates |
+| `service.yaml` | Stable ClusterIP address that load-balances across ready pods |
+
+API keys go in a Secret named `llm-credentials` (optional; pods start without it).
+
+### Run locally with minikube (macOS)
+
+```bash
+brew install minikube kubectl          # needs Docker Desktop running
+minikube start
+
+eval $(minikube docker-env)            # build straight into minikube's Docker
+docker build -t medical-triage:local .
+
+kubectl create secret generic llm-credentials \
+  --from-literal=PROVIDER_3_API_KEY=sk-... \
+  --from-literal=PROVIDER_3_BASE_URL=https://your-provider/v1   # optional
+
+kubectl apply -f k8s/
+kubectl rollout status deployment/medical-triage
+kubectl port-forward svc/medical-triage 8080:80   # open http://localhost:8080
+```
+
+Things to try:
+
+```bash
+kubectl get pods                                   # see the 2 replicas
+kubectl scale deployment/medical-triage --replicas=3
+kubectl delete pod <pod-name>                      # watch Kubernetes replace it
+kubectl logs -l app=medical-triage --tail=20
+minikube delete                                    # clean up
+```
+
+CI runs the same flow on every push in a throwaway [kind](https://kind.sigs.k8s.io/) cluster:
+deploy, smoke-test through the Service, scale to 3 replicas, and verify self-healing after a pod is deleted.
+
 ## CI/CD
 
 `.github/workflows/ci-cd.yml` runs on every push and pull request:
 
 1. **Lint & test**: `ruff` + `pytest`
 2. **Build & smoke-test**: builds the Docker image, starts it, and checks `/api/health`
-3. **Deploy** (main branch only): pushes the image to Artifact Registry and deploys to Cloud Run
+3. **Kubernetes**: deploys to a kind cluster, smoke-tests via the Service, scales, and checks self-healing
+4. **Deploy** (main branch only): pushes the image to Artifact Registry and deploys to Cloud Run
 
 The deploy job is skipped until GCP is configured. To enable it:
 

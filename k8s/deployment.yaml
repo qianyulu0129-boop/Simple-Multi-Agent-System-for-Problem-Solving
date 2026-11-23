@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medical-triage
+  labels:
+    app: medical-triage
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: medical-triage
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # keep full capacity during an update
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: medical-triage
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: web
+          image: medical-triage:local
+          imagePullPolicy: IfNotPresent   # use the locally built image (minikube / kind)
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: medical-triage-config
+            - secretRef:
+                name: llm-credentials
+                optional: true            # pod still starts without API keys; /api/analyze will report the missing key
+          readinessProbe:                 # only receive traffic once the app answers
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:                  # restart the container if it stops answering
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp             # writable scratch space for run outputs
+      volumes:
+        - name: tmp
+          emptyDir: {}

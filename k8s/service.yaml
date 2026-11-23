@@ -1,0 +1,15 @@
+# Stable in-cluster address that load-balances across all ready pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: medical-triage
+  labels:
+    app: medical-triage
+spec:
+  type: ClusterIP
+  selector:
+    app: medical-triage
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
